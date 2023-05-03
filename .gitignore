@@ -6,3 +6,4 @@
 /cmake_install.cmake
 /compile_commands.json
 /libsucky.so
+/.gdb_history

@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <dlfcn.h>
+#include <execinfo.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -20,7 +21,7 @@ typedef int (*Epoll_create)(int size);
 typedef int (*Epoll_create1)(int flags);
 typedef int (*Open)(const char *pathname, int flags, ...);
 typedef int (*Openat)(int dirfd, const char *pathname, int flags, ...);
-typedef int (*Openat2)(int dirfd, const char *pathname, const void *how, size_t size); // it's really a struct
+/* typedef int (*Openat2)(int dirfd, const char *pathname, const void *how, size_t size); // it's really a struct */
 typedef int (*Pipe)(int pipefd[2]);
 typedef int (*Socket)(int domain, int type, int protocol);
 typedef int (*Socketpair)(int domain, int type, int protocol, int sv[2]);
@@ -40,7 +41,7 @@ struct Originals {
     Epoll_create1 epoll_create1;
     Open open;
     Openat openat;
-    Openat2 openat2;
+    /* Openat2 openat2; */
     Pipe pipe;
     Socket socket;
     Socketpair socketpair;
@@ -62,17 +63,29 @@ void createOriginals()
     sOriginals->fds = 0;
     sOriginals->count = 0;
     sOriginals->accept = (Accept)dlsym(RTLD_NEXT, "accept");
+    assert(sOriginals->accept);
     sOriginals->accept4 = (Accept4)dlsym(RTLD_NEXT, "accept4");
+    assert(sOriginals->accept4);
     sOriginals->close = (Close)dlsym(RTLD_NEXT, "close");
+    assert(sOriginals->close);
     sOriginals->creat = (Creat)dlsym(RTLD_NEXT, "creat");
-    sOriginals->epoll_create = (Epoll_create)dlsym(RTLD_NEXT, "epoll_epoll");
-    sOriginals->epoll_create1 = (Epoll_create1)dlsym(RTLD_NEXT, "epoll_epoll");
+    assert(sOriginals->creat);
+    sOriginals->epoll_create = (Epoll_create)dlsym(RTLD_NEXT, "epoll_create");
+    assert(sOriginals->epoll_create);
+    sOriginals->epoll_create1 = (Epoll_create1)dlsym(RTLD_NEXT, "epoll_create1");
+    assert(sOriginals->epoll_create1);
     sOriginals->open = (Open)dlsym(RTLD_NEXT, "open");
+    assert(sOriginals->open);
     sOriginals->openat = (Openat)dlsym(RTLD_NEXT, "openat");
-    sOriginals->openat2 = (Openat2)dlsym(RTLD_NEXT, "openat2");
+    assert(sOriginals->openat);
+    /* sOriginals->openat2 = (Openat2)dlsym(RTLD_NEXT, "openat2"); */
+    /* assert(sOriginals->openat2); */
     sOriginals->pipe = (Pipe)dlsym(RTLD_NEXT, "pipe");
+    assert(sOriginals->pipe);
     sOriginals->socket = (Socket)dlsym(RTLD_NEXT, "socket");
+    assert(sOriginals->socket);
     sOriginals->socketpair = (Socketpair)dlsym(RTLD_NEXT, "socketpair");
+    assert(sOriginals->socketpair);
 }
 
 struct Originals *originals()
@@ -82,17 +95,22 @@ struct Originals *originals()
     return sOriginals;
 }
 
-void addFileDescriptors(int fd1, int fd2)
+void addFileDescriptors(int fd1, int fd2, const char *func)
 {
+    if (fd2 == -1) {
+        printf("Adding %d from %s\n", fd1, func);
+    } else {
+        printf("Adding %d and %d from %s\n", fd1, fd2, func);
+    }
     pthread_t thread = pthread_self();
     pthread_mutex_lock(&sMutex);
     if (fd2 == -1) {
-        sOriginals->fds = realloc(sOriginals->fds, sizeof(struct FileDescriptor) * sOriginals->count + 1);
+        sOriginals->fds = realloc(sOriginals->fds, sizeof(struct FileDescriptor) * (sOriginals->count + 1));
         struct FileDescriptor *desc = &sOriginals->fds[sOriginals->count++];
         desc->fd = fd1;
         desc->thread = thread;
     } else {
-        sOriginals->fds = realloc(sOriginals->fds, sizeof(struct FileDescriptor) * sOriginals->count + 2);
+        sOriginals->fds = realloc(sOriginals->fds, sizeof(struct FileDescriptor) * (sOriginals->count + 2));
         struct FileDescriptor *desc = &sOriginals->fds[sOriginals->count++];
         desc->fd = fd1;
         desc->thread = thread;
@@ -107,7 +125,7 @@ int socket(int domain, int type, int protocol)
 {
     int ret = originals()->socket(domain, type, protocol);
     if (ret != -1) {
-        addFileDescriptors(ret, -1);
+        addFileDescriptors(ret, -1, __FUNCTION__);
     }
     if (sVerbose) {
         fprintf(stderr, "SUCKY: socket(%d, %d, %d) -> %d\n", domain, type, protocol, ret);
@@ -119,7 +137,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
 {
     int ret = originals()->accept(sockfd, addr, addrlen);
     if (ret != -1) {
-        addFileDescriptors(ret, -1);
+        addFileDescriptors(ret, -1, __FUNCTION__);
     }
     if (sVerbose) {
         fprintf(stderr, "SUCKY: accept(%d, %p, %p) -> %d\n", sockfd, addr, addrlen, ret);
@@ -131,7 +149,7 @@ int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags)
 {
     int ret = originals()->accept4(sockfd, addr, addrlen, flags);
     if (ret != -1) {
-        addFileDescriptors(ret, -1);
+        addFileDescriptors(ret, -1, __FUNCTION__);
     }
     if (sVerbose) {
         fprintf(stderr, "SUCKY: accept4(%d, %p, %p, 0x%x) -> %d\n", sockfd, addr, addrlen, flags, ret);
@@ -143,7 +161,7 @@ int socketpair(int domain, int type, int protocol, int sv[2])
 {
     int ret = originals()->socketpair(domain, type, protocol, sv);
     if (ret != -1) {
-        addFileDescriptors(sv[0], sv[1]);
+        addFileDescriptors(sv[0], sv[1], __FUNCTION__);
     }
     if (sVerbose) {
         fprintf(stderr, "SUCKY: socketpair(%d, %d, %d, [%d, %d]) -> %d\n", domain, type, protocol, sv[0], sv[1], ret);
@@ -155,7 +173,7 @@ int pipe(int pipefd[2])
 {
     int ret = originals()->pipe(pipefd);
     if (ret != -1) {
-        addFileDescriptors(pipefd[0], pipefd[1]);
+        addFileDescriptors(pipefd[0], pipefd[1], __FUNCTION__);
     }
     if (sVerbose) {
         fprintf(stderr, "SUCKY: pipe([%d, %d]) -> %d\n", pipefd[0], pipefd[1], ret);
@@ -177,7 +195,13 @@ int close(int fd)
             if (sOriginals->fds[i].fd == fd) {
                 if (!pthread_equal(sOriginals->fds[i].thread, thread)) {
                     fprintf(stderr, "SUCKY: file descriptor %d closed from different thread than it was created in\n", fd);
-                    abort();
+                    void *frames[128];
+                    int count = backtrace(frames, sizeof(frames) / sizeof(frames[0]));
+                    char **symbols = backtrace_symbols(frames, count);
+                    int idx;
+                    for (idx=0; idx<count; ++idx) {
+                        fprintf(stderr, "%d: %s\n", idx, symbols[idx]);
+                    }
                 }
                 if (i + 1 < sOriginals->count) {
                     memmove(sOriginals + i, sOriginals + i + 1, sizeof(struct FileDescriptor) * sOriginals->count - i - 1);
@@ -215,7 +239,7 @@ int open(const char *pathname, int flags, ...)
         }
     }
     if (ret != -1) {
-        addFileDescriptors(ret, -1);
+        addFileDescriptors(ret, -1, __FUNCTION__);
     }
     return ret;
 }
@@ -224,7 +248,7 @@ int creat(const char *pathname, mode_t mode)
 {
     int ret = originals()->creat(pathname, mode);
     if (ret != -1) {
-        addFileDescriptors(ret, -1);
+        addFileDescriptors(ret, -1, __FUNCTION__);
     }
     if (sVerbose) {
         fprintf(stderr, "SUCKY: creat(%s, 0x%x) -> %d\n", pathname, mode, ret);
@@ -251,28 +275,28 @@ int openat(int dirfd, const char *pathname, int flags, ...)
         }
     }
     if (ret != -1) {
-        addFileDescriptors(ret, -1);
+        addFileDescriptors(ret, -1, __FUNCTION__);
     }
     return ret;
 }
 
-int openat2(int dirfd, const char *pathname, const void *how, size_t size)
-{
-    int ret = originals()->openat2(dirfd, pathname, how, size);
-    if (ret != -1) {
-        addFileDescriptors(ret, -1);
-    }
-    if (sVerbose) {
-        fprintf(stderr, "SUCKY: openat2(%d, %s, %p, %zu) -> %d\n", dirfd, pathname, how, size, ret);
-    }
-    return ret;
-}
+/* int openat2(int dirfd, const char *pathname, const void *how, size_t size) */
+/* { */
+/*     int ret = originals()->openat2(dirfd, pathname, how, size); */
+/*     if (ret != -1) { */
+/*         addFileDescriptors(ret, -1, __FUNCTION__); */
+/*     } */
+/*     if (sVerbose) { */
+/*         fprintf(stderr, "SUCKY: openat2(%d, %s, %p, %zu) -> %d\n", dirfd, pathname, how, size, ret); */
+/*     } */
+/*     return ret; */
+/* } */
 
 int epoll_create(int size)
 {
     int ret = originals()->epoll_create(size);
     if (ret != -1) {
-        addFileDescriptors(ret, -1);
+        addFileDescriptors(ret, -1, __FUNCTION__);
     }
     if (sVerbose) {
         fprintf(stderr, "SUCKY: epoll_create(%d) -> %d\n", size, ret);
@@ -284,7 +308,7 @@ int epoll_create1(int flags)
 {
     int ret = originals()->epoll_create1(flags);
     if (ret != -1) {
-        addFileDescriptors(ret, -1);
+        addFileDescriptors(ret, -1, __FUNCTION__);
     }
     if (sVerbose) {
         fprintf(stderr, "SUCKY: epoll_create1(0x%x) -> %d\n", flags, ret);
